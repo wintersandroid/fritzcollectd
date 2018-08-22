@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # fritzcollectd - FRITZ!Box collectd plugin
 # Copyright (c) 2014-2017 Christian Fetzer
 #
