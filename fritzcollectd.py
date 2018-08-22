@@ -198,7 +198,8 @@ class FritzCollectd(object):
         for (instance, value_instance), (value_type, value) in values.items():
            influx_data[0]["fields"][value_instance] = value
 
-        print ("Influx Data: ", influx_data)
+        if self._verbose:
+            print ("Influx Data: ", influx_data)
         influxdb.write_points(influx_data)
 
     def _read_data(self, service_actions, connection):
