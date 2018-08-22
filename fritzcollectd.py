@@ -22,14 +22,15 @@
 # pylint: disable=useless-object-inheritance
 
 """ fritzcollectd - FRITZ!Box collectd plugin """
-
+import argparse
 from collections import namedtuple, OrderedDict
 
 import fritzconnection
 
 from lxml.etree import XMLSyntaxError  # pylint: disable=no-name-in-module
+from config import Config
+from influxdb import InfluxDBClient
 
-import collectd  # pylint: disable=import-error
 
 __version__ = '0.6.0'
 
@@ -80,6 +81,8 @@ class FritzCollectd(object):
           'NewMultimeterEnergy': Value('energy', 'power'),
           'NewTemperatureCelsius': Value('temperature', 'temperature'),
           'NewSwitchState': Value('switchstate', 'gauge')}),
+        (ServiceAction('DeviceInfo:1', 'GetInfo'),
+         {'NewUpTime': Value('boxuptime', 'uptime')}),
     ])
 
     CONVERSION = {
@@ -107,16 +110,16 @@ class FritzCollectd(object):
         self._fritz_password = password
         self._fritz_hostname = hostname
         self._plugin_instance = plugin_instance
-        self._verbose = True if verbose.lower() in ['true', 'yes'] else False
+        self._verbose = verbose
         if self._verbose:
-            collectd.info("fritzcollectd: Verbose logging enabled")
+            print("fritzcollectd: Verbose logging enabled")
         self._fc = None
         self._fc_auth = None
 
     def _dispatch_value(self, plugin_instance,
                         value_type, value_instance, value):
         """ Dispatch value to collectd """
-        val = collectd.Values()
+        val = OrderedDict()
         val.host = self._fritz_hostname
         val.plugin = self.PLUGIN_NAME
         val.plugin_instance = plugin_instance
@@ -124,12 +127,12 @@ class FritzCollectd(object):
         val.type_instance = value_instance
         val.values = [value]
         if self._verbose:
-            collectd.info("fritzcollectd: Dispatching: host: '{}', "
+            print("fritzcollectd: Dispatching: host: '{}', "
                           "plugin: '{}', plugin_instance: '{}', type: '{}', "
                           "type_instance: '{}', values: '{}'".format(
                               val.host, val.plugin, val.plugin_instance,
                               val.type, val.type_instance, val.values))
-        val.dispatch()
+        # val.dispatch()
 
     def init(self):
         """ Initialize the connection to the FRITZ!Box """
@@ -164,7 +167,7 @@ class FritzCollectd(object):
                 self._fc_auth = None
                 raise IOError("fritzcollectd: Incorrect password")
         else:
-            collectd.info("fritzcollectd: No password configured, "
+            print("fritzcollectd: No password configured, "
                           "some values cannot be queried")
 
     @classmethod
@@ -173,20 +176,29 @@ class FritzCollectd(object):
         for service_action in list(service_actions.keys()):
             if ((service_action.service, service_action.action)
                     not in actionnames):
-                collectd.info("fritzcollectd: Skipping unsupported service "
+                print("fritzcollectd: Skipping unsupported service "
                               "action: {} {}".format(service_action.service,
                                                      service_action.action))
                 del service_actions[service_action]
 
-    def read(self):
+    def read(self, influxdb):
         """ Read and dispatch """
+        influx_data = [{
+            "measurement": "fritzbox-data",
+            "tags": {
+                "host": self._fritz_hostname,
+            },
+            "fields": {}
+        }]
         values = self._read_data(self.SERVICE_ACTIONS, self._fc)
         for (instance, value_instance), (value_type, value) in values.items():
-            self._dispatch_value(instance, value_type, value_instance, value)
-
+           influx_data[0]["fields"][value_instance] = value
         values = self._read_data(self.SERVICE_ACTIONS_AUTH, self._fc_auth)
         for (instance, value_instance), (value_type, value) in values.items():
-            self._dispatch_value(instance, value_type, value_instance, value)
+           influx_data[0]["fields"][value_instance] = value
+
+        print ("Influx Data: ", influx_data)
+        influxdb.write_points(influx_data)
 
     def _read_data(self, service_actions, connection):
         """ Read data from the FRITZ!Box
@@ -211,7 +223,7 @@ class FritzCollectd(object):
                 parameters = {service_action.index_field: index} \
                              if service_action.index_field else {}
                 if self._verbose:
-                    collectd.info("fritzcollectd: Calling action: "
+                    print("fritzcollectd: Calling action: "
                                   "{} {} {}".format(service_action.service,
                                                     service_action.action,
                                                     parameters))
@@ -220,7 +232,7 @@ class FritzCollectd(object):
                     **parameters)
                 if not readings:
                     if self._verbose:
-                        collectd.info("fritzcollectd: No readings received")
+                        print("fritzcollectd: No readings received")
                     break
 
                 plugin_instance = [self._plugin_instance]
@@ -249,27 +261,11 @@ class FritzCollectd(object):
         return values
 
 
-def callback_configure(config):
+def callback_configure():
     """ Configure callback """
-    params = {}
-    for node in config.children:
-        if node.key == 'Address':
-            params['address'] = node.values[0]
-        elif node.key == 'Port':
-            params['port'] = int(node.values[0])
-        elif node.key == 'User':
-            params['user'] = node.values[0]
-        elif node.key == 'Password':
-            params['password'] = node.values[0]
-        elif node.key == 'Hostname':
-            params['hostname'] = node.values[0]
-        elif node.key == 'Instance':
-            params['plugin_instance'] = node.values[0]
-        elif node.key == 'Verbose':
-            params['verbose'] = node.values[0]
-        else:
-            collectd.warning('fritzcollectd: Unknown config %s' % node.key)
-    CONFIGS.append(FritzCollectd(**params))
+    config = Config().get()
+    for node in config['hosts']:
+        CONFIGS.append(FritzCollectd(**node))
 
 
 def callback_init():
@@ -278,13 +274,13 @@ def callback_init():
         config.init()
 
 
-def callback_read():
+def callback_read(influxdb):
     """ Read callback """
     for config in CONFIGS:
         try:
-            config.read()
+            config.read(influxdb)
         except XMLSyntaxError:
-            collectd.warning('fritzcollectd: Invalid data received, '
+            print('fritzcollectd: Invalid data received, '
                              'attempting to reconnect')
             config.init()
 
@@ -294,7 +290,13 @@ def callback_shutdown():
     del CONFIGS[:]
 
 
-collectd.register_config(callback_configure)
-collectd.register_init(callback_init)
-collectd.register_read(callback_read)
-collectd.register_shutdown(callback_shutdown)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--influxdb", default="demo")
+    args = parser.parse_args()
+    dbclient = InfluxDBClient('sensornet', 8086, 'root', 'root', args.influxdb)
+
+    callback_configure()
+    callback_init()
+    callback_read(dbclient)
+    callback_shutdown()

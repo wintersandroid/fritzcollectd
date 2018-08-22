@@ -32,7 +32,7 @@ setup(
     version=VERSION,
     py_modules=['fritzcollectd'],
     license='MIT',
-    description='A collectd plugin for monitoring AVM FRITZ!Box routers',
+    description='A influxdb application for monitoring AVM FRITZ!Box routers',
     long_description=read('README.rst'),
     author='Christian Fetzer',
     author_email='fetzer.ch@gmail.com',
@@ -50,6 +50,7 @@ setup(
     ],
     keywords='AVM FritzBox collectd',
     install_requires=[
-        'fritzconnection>=0.6.0'
+        'fritzconnection>=0.6.0',
+        'influxdb'
     ],
 )

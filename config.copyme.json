@@ -1,0 +1,12 @@
+{
+  "hosts": [
+    {
+      "address": "fritz.box",
+      "port": 49000,
+      "user": "ausername",
+      "password": "apasswd",
+      "hostname": "FritzBox",
+      "verbose": true
+    }
+  ]
+}
